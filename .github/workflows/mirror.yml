@@ -1,0 +1,37 @@
+name: Mirror NVD feeds
+
+# Fetches NIST's NVD JSON feeds (the two CPE tarballs and every CVE feed) with their
+# .meta files, verifies them, and replaces the changed ones in one rolling GitHub
+# release, so a worker can download them from GitHub's CDN instead of nvd.nist.gov.
+# Daily after NIST's nightly rebuild, by hand from the Actions tab, or on demand
+# through the API (repository_dispatch with event_type "mirror").
+on:
+  schedule:
+    - cron: "20 6 * * *"
+  workflow_dispatch:
+  repository_dispatch:
+    types: [mirror]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: feeds
+      BUDGET_SECONDS: "15000"
+      PARALLEL: "4"
+      SEGMENTS: "6"
+      SEGMENT_MIB: "32"
+      PROGRESS_SECONDS: "60"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch, verify and publish changed feeds
+        run: ./mirror.sh
