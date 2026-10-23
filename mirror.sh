@@ -33,6 +33,7 @@ PROGRESS_SECONDS="${PROGRESS_SECONDS:-30}"
 ASSET_BASE="https://github.com/$REPO/releases/download/$RELEASE_TAG"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
 START=$(date +%s)
+BEGAN_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cd "$WORK"
 mkdir results
@@ -214,6 +215,16 @@ published=$(count published); unchanged=$(count unchanged); failed=$(count faile
   done
 } >> "$SUMMARY"
 
+# state.json, last: when this run began and ended, how it ended (done, budget
+# when feeds were left for the next run, error when any failed) and its
+# counts, so a reader can tell a live mirror from a stopped one.
+reason=done
+[ "$skipped" -eq 0 ] || reason=budget
+[ "$failed" -eq 0 ] || reason=error
+ENDED_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '{"feeds": %d, "published": %d, "unchanged": %d, "failed": %d, "skipped": %d, "updated": "%s", "last_run": {"began": "%s", "ended": "%s", "reason": "%s"}}\n' \
+  "$total" "$published" "$unchanged" "$failed" "$skipped" "$ENDED_ISO" "$BEGAN_ISO" "$ENDED_ISO" "$reason" > "$WORK/state.json"
+gh release upload "$RELEASE_TAG" --repo "$REPO" --clobber "$WORK/state.json" </dev/null >/dev/null || echo "state.json not uploaded; the next run writes it again"
 gh release edit "$RELEASE_TAG" --repo "$REPO" --title "$TITLE" --notes "$NOTES Last run $(date -u +'%Y-%m-%d %H:%M UTC'): $published published, $unchanged unchanged, $failed failed, $skipped left for the next run." >/dev/null
 echo "Done: $published published, $unchanged unchanged, $failed failed, $skipped left for the next run."
 [ "$failed" -eq 0 ] || exit 1
