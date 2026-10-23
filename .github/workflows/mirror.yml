@@ -1,10 +1,12 @@
-name: Mirror NVD feeds
+name: Mirror feeds
 
-# Fetches NIST's NVD JSON feeds (the two CPE tarballs and every CVE feed) with their
-# .meta files, verifies them, and replaces the changed ones in one rolling GitHub
-# release, so a worker can download them from GitHub's CDN instead of nvd.nist.gov.
-# Daily after NIST's nightly rebuild, by hand from the Actions tab, or on demand
-# through the API (repository_dispatch with event_type "mirror").
+# Fetches the upstream's JSON feeds (the two CPE tarballs and every CVE feed) with
+# their .meta files, verifies them, and replaces the changed ones in one rolling
+# GitHub release, so a worker can download them from GitHub's CDN. Daily after the
+# upstream's nightly rebuild, by hand from the Actions tab, or on demand through the
+# API (repository_dispatch with event_type "mirror").
+# Set the repository secret SOURCE_BASE to the feeds' root with its trailing slash
+# (Settings → Secrets and variables → Actions → Secrets); it is masked in every log.
 on:
   schedule:
     - cron: "20 6 * * *"
@@ -33,5 +35,12 @@ jobs:
       PROGRESS_SECONDS: "60"
     steps:
       - uses: actions/checkout@v4
+      - name: refuse without the source secret
+        env:
+          BASE: ${{ secrets.SOURCE_BASE }}
+        run: |
+          if [ -z "$BASE" ]; then echo "::error::repository secret SOURCE_BASE is not set"; exit 1; fi
       - name: Fetch, verify and publish changed feeds
+        env:
+          BASE: ${{ secrets.SOURCE_BASE }}
         run: ./mirror.sh

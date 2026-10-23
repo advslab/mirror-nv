@@ -1,6 +1,6 @@
 name: history walk
 
-# Keeps the NVD CVE change history in one rolling release (tag `history`,
+# Keeps the upstream's CVE change history in one rolling release (tag `history`,
 # separate from the feeds release): changes-YYYY-MM.ndjson.gz, one line per
 # change event as the API returns it, by the month the change was created,
 # indexed by state.json. The history is walked month by month, newest first,
@@ -12,9 +12,10 @@ name: history walk
 # workflow with chain - 1 and every other input unchanged. The concurrency
 # group keeps runs one at a time.
 #
-# Set the repository secret NVD_API_KEY (Settings → Secrets and variables →
-# Actions → Secrets); without it the walk runs at the anonymous pace of one
-# request per 8 seconds.
+# Set the repository secrets API_BASE (the API's root with its trailing slash)
+# and API_KEY (Settings → Secrets and variables → Actions → Secrets); both are
+# masked in every log. Without the key the walk runs at the anonymous pace of
+# one request per 8 seconds.
 on:
   schedule:
     - cron: "40 */4 * * *"
@@ -47,10 +48,16 @@ jobs:
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
+      - name: refuse without the source secret
+        env:
+          API_BASE: ${{ secrets.API_BASE }}
+        run: |
+          if [ -z "$API_BASE" ]; then echo "::error::repository secret API_BASE is not set"; exit 1; fi
       - name: walk
         id: walk
         env:
-          API_KEY: ${{ secrets.NVD_API_KEY }}
+          API_BASE: ${{ secrets.API_BASE }}
+          API_KEY: ${{ secrets.API_KEY }}
           BUDGET: ${{ inputs.budget || '330' }}
           PACE: ${{ inputs.pace }}
           CHAIN: ${{ inputs.chain || '3' }}

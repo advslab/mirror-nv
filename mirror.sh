@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Mirror NIST's NVD JSON feeds to one rolling GitHub release.
-#   - the CPE dictionary and CPE match tarballs (nvdcpe-2.0.tar.gz, nvdcpematch-2.0.tar.gz)
-#   - the CVE feeds: nvdcve-2.0-<year>.json.gz for every year since 2002, -modified and -recent
+# Mirror an upstream's JSON feeds to one rolling GitHub release.
+#   - the two CPE tarballs (dictionary and match)
+#   - the CVE feeds, one per year since 2002, plus -modified and -recent
 # each with its .meta. Only feeds whose .meta sha256 changed since the release's copy are
 # fetched; every verified file replaces its asset in the single release RELEASE_TAG, the
 # data file before its .meta, so a reader that finds a .meta can trust the file beside it.
@@ -9,15 +9,17 @@
 # line names its feed, a progress line is printed while each download runs, and a per-feed
 # table goes to the job summary.
 # Needs: curl, gh (authenticated via GH_TOKEN), tar, gzip, sha256sum.
+# The upstream is named only by BASE, the feeds' root (a repository secret).
 set -euo pipefail
 
-BASE=https://nvd.nist.gov/feeds/json
+BASE="${BASE:?set BASE to the feeds root (the repository secret SOURCE_BASE)}"
+BASE="${BASE%/}"
 REPO="${GITHUB_REPOSITORY:?set GITHUB_REPOSITORY owner/repo}"
 RELEASE_TAG="${RELEASE_TAG:-feeds}"
 # Stop starting new downloads after this many seconds; what is verified by then is published,
-# the rest waits for the next run (the job has a hard limit and NIST can be very slow).
+# the rest waits for the next run (the job has a hard limit and the upstream can be very slow).
 BUDGET_SECONDS="${BUDGET_SECONDS:-15000}"
-# Feeds processed at once. Kept small: NIST throttles and cuts long streams.
+# Feeds processed at once. Kept small: the upstream throttles and cuts long streams.
 PARALLEL="${PARALLEL:-4}"
 # A file is downloaded as one byte range per SEGMENT_MIB, at most SEGMENTS ranges at once.
 SEGMENTS="${SEGMENTS:-6}"
@@ -46,7 +48,7 @@ elapsed() { echo $(( $(date +%s) - START )); }
 mib() { awk -v b="$1" 'BEGIN { printf "%.1f MiB", b / 1048576 }'; }
 hms() { printf '%dh%02dm%02ds' $(($1/3600)) $(($1%3600/60)) $(($1%60)); }
 
-# content_sha <file> <ext>: the sha256 NIST publishes — of the files inside a tar.gz, of the
+# content_sha <file> <ext>: the sha256 the .meta publishes — of the files inside a tar.gz, of the
 # uncompressed JSON for a json.gz.
 content_sha() {
   case $2 in
@@ -60,7 +62,7 @@ fsize() { stat -c %s "$1" 2>/dev/null || echo 0; }
 # fetch_part <tag> <url> <part> <first-byte> <last-byte>: fetch one byte range into <part>,
 # resuming from what is on disk. HTTP/1.1 only: a resume over HTTP/2 can corrupt the file
 # (measured). Only a 206 reply is kept, so a server that ignores the range cannot splice the
-# wrong bytes in. An attempt gives up after 30s without data (NIST stalls often).
+# wrong bytes in. An attempt gives up after 30s without data (the upstream stalls often).
 fetch_part() {
   local tag=$1 url=$2 part=$3 first=$4 last=$5 need have code tries=0 nogrow=0
   need=$(( last - first + 1 ))
@@ -82,7 +84,7 @@ fetch_part() {
   [ "$(fsize "$part")" -eq "$need" ] || { echo "::warning::$tag $part: $(fsize "$part") bytes, want $need"; return 1; }
 }
 
-# download <tag> <url> <dest> <want-bytes>: NIST throttles each connection (measured: four range
+# download <tag> <url> <dest> <want-bytes>: the upstream throttles each connection (measured: four range
 # requests together ran 3x one stream), so a big file is fetched as up to SEGMENTS byte ranges
 # at once, one per SEGMENT_MIB, then joined. Prints a progress line every PROGRESS_SECONDS.
 download() {
@@ -168,8 +170,8 @@ progress() {
 
 ensure_release() {
   if ! gh release view "$RELEASE_TAG" --repo "$REPO" >/dev/null 2>&1; then
-    gh release create "$RELEASE_TAG" --repo "$REPO" --title "NVD feeds (rolling)" \
-      --notes "Rolling mirror of NIST's NVD JSON feeds; every asset is replaced in place when NIST's .meta changes. Verified against each .meta (gzSize and content sha256)."
+    gh release create "$RELEASE_TAG" --repo "$REPO" --title "Feeds (rolling)" \
+      --notes "Rolling copy of upstream feed files, replaced in place when the upstream .meta changes. Verified against each .meta (gzSize and content sha256)."
   fi
 }
 
@@ -196,7 +198,7 @@ done
 
 published=$(count published); unchanged=$(count unchanged); failed=$(count failed); skipped=$(count skipped)
 {
-  echo "## NVD feed mirror"
+  echo "## Feed mirror"
   echo
   echo "$published published, $unchanged unchanged, $failed failed, $skipped left for the next run, in $(hms "$(elapsed)") with $PARALLEL at a time."
   echo
@@ -209,6 +211,6 @@ published=$(count published); unchanged=$(count unchanged); failed=$(count faile
   done
 } >> "$SUMMARY"
 
-gh release edit "$RELEASE_TAG" --repo "$REPO" --notes "Rolling mirror of NIST's NVD JSON feeds, replaced in place when NIST's .meta changes and verified against it (gzSize, content sha256). Last run $(date -u +'%Y-%m-%d %H:%M UTC'): $published published, $unchanged unchanged, $failed failed, $skipped left for the next run." >/dev/null
+gh release edit "$RELEASE_TAG" --repo "$REPO" --notes "Rolling copy of upstream feed files, replaced in place when the upstream .meta changes and verified against it (gzSize, content sha256). Last run $(date -u +'%Y-%m-%d %H:%M UTC'): $published published, $unchanged unchanged, $failed failed, $skipped left for the next run." >/dev/null
 echo "Done: $published published, $unchanged unchanged, $failed failed, $skipped left for the next run."
 [ "$failed" -eq 0 ] || exit 1
