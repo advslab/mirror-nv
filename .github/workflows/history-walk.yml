@@ -1,0 +1,79 @@
+name: history walk
+
+# Keeps the NVD CVE change history in one rolling release (tag `history`,
+# separate from the feeds release): changes-YYYY-MM.ndjson.gz, one line per
+# change event as the API returns it, by the month the change was created,
+# indexed by state.json. The history is walked month by month, newest first,
+# each month resumable where a run stopped; once it is complete each run lists
+# the changes since a day before the last pass and adds them to their months.
+#
+# Chaining: when a run ends with work left (its budget, or an error other than
+# a stall) and `chain` is above 0, it dispatches one follow-up run of this
+# workflow with chain - 1 and every other input unchanged. The concurrency
+# group keeps runs one at a time.
+#
+# Set the repository secret NVD_API_KEY (Settings → Secrets and variables →
+# Actions → Secrets); without it the walk runs at the anonymous pace of one
+# request per 8 seconds.
+on:
+  schedule:
+    - cron: "40 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      chain:
+        description: "how many follow-up runs may still follow this one"
+        required: false
+        default: "3"
+      budget:
+        description: "minutes the walk may run"
+        required: false
+        default: "330"
+      pace:
+        description: "seconds between requests (default 0.8 with a key, 8 without)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: history-walk
+  cancel-in-progress: false
+
+jobs:
+  walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - name: walk
+        id: walk
+        env:
+          API_KEY: ${{ secrets.NVD_API_KEY }}
+          BUDGET: ${{ inputs.budget || '330' }}
+          PACE: ${{ inputs.pace }}
+          CHAIN: ${{ inputs.chain || '3' }}
+          RELEASE_TAG: history
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          chmod +x bin/history-walk
+          sha256sum bin/history-walk
+          bin/history-walk
+          more=$(sed -n 's/^more=//p' "$GITHUB_OUTPUT" | tail -n 1)
+          if [ "$more" != true ] || [ "$CHAIN" -le 0 ]; then
+            echo "chain: no follow-up run requested (more=${more:-unset}, chain=$CHAIN)"
+          fi
+      - name: chain
+        if: ${{ success() && steps.walk.outputs.more == 'true' && fromJSON(inputs.chain || '3') > 0 }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHAIN: ${{ inputs.chain || '3' }}
+          BUDGET: ${{ inputs.budget || '330' }}
+          PACE: ${{ inputs.pace }}
+        run: |
+          left=$((CHAIN - 1))
+          gh workflow run history-walk.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
+            -f chain="$left" -f budget="$BUDGET" -f pace="$PACE"
+          echo "chain: follow-up run requested; $left more may follow it"
