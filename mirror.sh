@@ -16,6 +16,10 @@ BASE="${BASE:?set BASE to the feeds root (the repository secret SOURCE_BASE)}"
 BASE="${BASE%/}"
 REPO="${GITHUB_REPOSITORY:?set GITHUB_REPOSITORY owner/repo}"
 RELEASE_TAG="${RELEASE_TAG:-feeds}"
+# The release's title and the first sentence of its notes, set at the end of
+# every run; neither names the upstream.
+TITLE="Feed files (rolling)"
+NOTES="Rolling copy of upstream feed files, replaced in place when the upstream .meta changes and verified against it (gzSize, content sha256)."
 # Stop starting new downloads after this many seconds; what is verified by then is published,
 # the rest waits for the next run (the job has a hard limit and the upstream can be very slow).
 BUDGET_SECONDS="${BUDGET_SECONDS:-15000}"
@@ -170,8 +174,7 @@ progress() {
 
 ensure_release() {
   if ! gh release view "$RELEASE_TAG" --repo "$REPO" >/dev/null 2>&1; then
-    gh release create "$RELEASE_TAG" --repo "$REPO" --title "Feeds (rolling)" \
-      --notes "Rolling copy of upstream feed files, replaced in place when the upstream .meta changes. Verified against each .meta (gzSize and content sha256)."
+    gh release create "$RELEASE_TAG" --repo "$REPO" --title "$TITLE" --notes "$NOTES"
   fi
 }
 
@@ -211,6 +214,6 @@ published=$(count published); unchanged=$(count unchanged); failed=$(count faile
   done
 } >> "$SUMMARY"
 
-gh release edit "$RELEASE_TAG" --repo "$REPO" --notes "Rolling copy of upstream feed files, replaced in place when the upstream .meta changes and verified against it (gzSize, content sha256). Last run $(date -u +'%Y-%m-%d %H:%M UTC'): $published published, $unchanged unchanged, $failed failed, $skipped left for the next run." >/dev/null
+gh release edit "$RELEASE_TAG" --repo "$REPO" --title "$TITLE" --notes "$NOTES Last run $(date -u +'%Y-%m-%d %H:%M UTC'): $published published, $unchanged unchanged, $failed failed, $skipped left for the next run." >/dev/null
 echo "Done: $published published, $unchanged unchanged, $failed failed, $skipped left for the next run."
 [ "$failed" -eq 0 ] || exit 1
