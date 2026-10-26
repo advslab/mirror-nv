@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Mirror an upstream's JSON feeds to one rolling GitHub release.
+# Mirror an upstream's JSON feeds to one rolling GitHub release, or to an object store
+# when its SPACES_* variables are set (bin/feeds-put chooses, and seeds the store once).
 #   - the two CPE tarballs (dictionary and match)
 #   - the CVE feeds, one per year since 2002, plus -modified and -recent
 # each with its .meta. Only feeds whose .meta sha256 changed since the release's copy are
@@ -8,14 +9,17 @@
 # Up to PARALLEL feeds are processed at once, a big one as several byte ranges; every log
 # line names its feed, a progress line is printed while each download runs, and a per-feed
 # table goes to the job summary.
-# Needs: curl, gh (authenticated via GH_TOKEN), tar, gzip, sha256sum.
+# Needs: curl, bin/feeds-put beside this script, gh (authenticated via GH_TOKEN), tar, gzip,
+# sha256sum.
 # The upstream is named only by BASE, the feeds' root (a repository secret).
 set -euo pipefail
 
 BASE="${BASE:?set BASE to the feeds root (the repository secret SOURCE_BASE)}"
 BASE="${BASE%/}"
-REPO="${GITHUB_REPOSITORY:?set GITHUB_REPOSITORY owner/repo}"
-RELEASE_TAG="${RELEASE_TAG:-feeds}"
+: "${GITHUB_REPOSITORY:?set GITHUB_REPOSITORY owner/repo}"
+export RELEASE_TAG="${RELEASE_TAG:-feeds}"
+# Every list, read, upload and title goes through feeds-put.
+PUT="${FEEDS_PUT:-$(cd "$(dirname "$0")" && pwd)/bin/feeds-put}"
 # The release's title and the first sentence of its notes, set at the end of
 # every run; neither names the upstream.
 TITLE="Feed files (rolling)"
@@ -30,7 +34,6 @@ SEGMENTS="${SEGMENTS:-6}"
 SEGMENT_MIB="${SEGMENT_MIB:-32}"
 # Seconds between progress lines while a download runs.
 PROGRESS_SECONDS="${PROGRESS_SECONDS:-30}"
-ASSET_BASE="https://github.com/$REPO/releases/download/$RELEASE_TAG"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
 START=$(date +%s)
 BEGAN_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -140,7 +143,7 @@ process_feed() {
   if [ -z "$want" ] || [ -z "$sha" ]; then
     echo "::warning::$tag .meta lacks gzSize/sha256"; result "$name" failed 0 0 ".meta lacks gzSize/sha256"; return
   fi
-  prev=$(curl -fsSL "$ASSET_BASE/$meta" 2>/dev/null | sed -n 's/^sha256:\([^[:space:]]*\).*/\1/p' | tr -d '\r' | tr 'A-F' 'a-f' || true)
+  prev=$("$PUT" get "$meta" 2>/dev/null </dev/null | sed -n 's/^sha256:\([^[:space:]]*\).*/\1/p' | tr -d '\r' | tr 'A-F' 'a-f' || true)
   if [ -n "$prev" ] && [ "$prev" = "$sha" ]; then
     echo "$tag unchanged"; result "$name" unchanged "$want" 0 ""; return
   fi
@@ -157,8 +160,7 @@ process_feed() {
   fi
   echo "$tag verified, uploading"
   # Data file first, then its .meta, each replacing the previous asset.
-  if ! gh release upload "$RELEASE_TAG" --repo "$REPO" --clobber "$data" </dev/null ||
-     ! gh release upload "$RELEASE_TAG" --repo "$REPO" --clobber "$meta" </dev/null; then
+  if ! "$PUT" upload "$data" "$meta" </dev/null; then
     echo "::warning::$tag upload failed"; result "$name" failed "$want" $(( $(date +%s) - t0 )) "upload failed"; return
   fi
   rm -f "$data"
@@ -173,13 +175,8 @@ progress() {
        "$(jobs -rp | wc -l) running"
 }
 
-ensure_release() {
-  if ! gh release view "$RELEASE_TAG" --repo "$REPO" >/dev/null 2>&1; then
-    gh release create "$RELEASE_TAG" --repo "$REPO" --title "$TITLE" --notes "$NOTES"
-  fi
-}
-
-ensure_release
+# Creates the release when it is missing, or seeds an empty store from it.
+"$PUT" ensure "$TITLE" "$NOTES" </dev/null >/dev/null
 mapfile -t FEED_LIST < <(feeds)
 total=${#FEED_LIST[@]}
 echo "== $total feeds, $PARALLEL at a time, budget $(hms "$BUDGET_SECONDS")"
@@ -224,7 +221,7 @@ reason=done
 ENDED_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf '{"feeds": %d, "published": %d, "unchanged": %d, "failed": %d, "skipped": %d, "updated": "%s", "last_run": {"began": "%s", "ended": "%s", "reason": "%s"}}\n' \
   "$total" "$published" "$unchanged" "$failed" "$skipped" "$ENDED_ISO" "$BEGAN_ISO" "$ENDED_ISO" "$reason" > "$WORK/state.json"
-gh release upload "$RELEASE_TAG" --repo "$REPO" --clobber "$WORK/state.json" </dev/null >/dev/null || echo "state.json not uploaded; the next run writes it again"
-gh release edit "$RELEASE_TAG" --repo "$REPO" --title "$TITLE" --notes "$NOTES Last run $(date -u +'%Y-%m-%d %H:%M UTC'): $published published, $unchanged unchanged, $failed failed, $skipped left for the next run." >/dev/null
+"$PUT" upload "$WORK/state.json" </dev/null >/dev/null || echo "state.json not uploaded; the next run writes it again"
+"$PUT" edit "$TITLE" "$NOTES Last run $(date -u +'%Y-%m-%d %H:%M UTC'): $published published, $unchanged unchanged, $failed failed, $skipped left for the next run." >/dev/null
 echo "Done: $published published, $unchanged unchanged, $failed failed, $skipped left for the next run."
 [ "$failed" -eq 0 ] || exit 1

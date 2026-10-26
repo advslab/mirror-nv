@@ -43,4 +43,9 @@ jobs:
       - name: Fetch, verify and publish changed feeds
         env:
           BASE: ${{ secrets.SOURCE_BASE }}
+          SPACES_ENDPOINT: ${{ secrets.SPACES_ENDPOINT }}
+          SPACES_BUCKET: ${{ secrets.SPACES_BUCKET }}
+          SPACES_KEY: ${{ secrets.SPACES_KEY }}
+          SPACES_SECRET: ${{ secrets.SPACES_SECRET }}
+          SPACES_REGION: sgp1
         run: ./mirror.sh
