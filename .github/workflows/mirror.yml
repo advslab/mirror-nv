@@ -47,5 +47,5 @@ jobs:
           SPACES_BUCKET: ${{ secrets.SPACES_BUCKET }}
           SPACES_KEY: ${{ secrets.SPACES_KEY }}
           SPACES_SECRET: ${{ secrets.SPACES_SECRET }}
-          SPACES_REGION: sgp1
+          SPACES_REGION: ${{ secrets.SPACES_REGION }}
         run: ./mirror.sh
